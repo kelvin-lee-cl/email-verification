@@ -39,12 +39,16 @@
         <label class="option-field" for="delaySelect">
           Delay between emails
           <select id="delaySelect">
-            <option value="2000">2 seconds</option>
             <option value="5000">5 seconds</option>
-            <option value="10000" selected>10 seconds (recommended)</option>
-            <option value="15000">15 seconds</option>
-            <option value="30000">30 seconds</option>
+            <option value="10000">10 seconds</option>
+            <option value="15000" selected>15 seconds (recommended)</option>
+            <option value="30000">30 seconds (Gmail-heavy lists)</option>
+            <option value="60000">60 seconds (safest)</option>
           </select>
+        </label>
+        <label class="option-check">
+          <input type="checkbox" id="slowModeCheck" checked>
+          Auto-pause every 8 emails (90s) to avoid blocks
         </label>
         <label class="option-check">
           <input type="checkbox" id="autoStartCheck" checked>
@@ -110,7 +114,7 @@
     <footer>
       <p>
         MAIL FROM: <code>admin@futureleadersunion.com</code>.
-        Use a 10–15s delay for large batches. Keep this browser tab open until complete.
+        Use a 15–30s delay for large batches. Auto-pause helps avoid Gmail blocks. Keep this browser tab open until complete.
       </p>
     </footer>
   </div>

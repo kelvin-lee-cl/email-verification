@@ -1,7 +1,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { verifyEmail, sleep, DEFAULTS } = require('./lib/smtp');
+const { verifyEmail, sleep, isConnectionError, DEFAULTS } = require('./lib/smtp');
 const { checkPort25Open } = require('./lib/port25');
 
 const PORT = process.env.PORT || 3000;
@@ -88,6 +88,17 @@ async function handleVerifyStream(req, res) {
     ? Math.max(1000, Math.min(payload.delayMs, 60000))
     : DEFAULTS.delayBetweenMs;
 
+  const cooldownEvery = typeof payload.cooldownEvery === 'number'
+    ? Math.max(0, Math.min(payload.cooldownEvery, 100))
+    : 8;
+  const cooldownMs = typeof payload.cooldownMs === 'number'
+    ? Math.max(10000, Math.min(payload.cooldownMs, 600000))
+    : 90000;
+  const streakCooldownMs = typeof payload.streakCooldownMs === 'number'
+    ? Math.max(30000, Math.min(payload.streakCooldownMs, 600000))
+    : 120000;
+  const streakThreshold = 3;
+
   res.writeHead(200, {
     'Content-Type': 'application/x-ndjson',
     'Cache-Control': 'no-cache',
@@ -109,6 +120,8 @@ async function handleVerifyStream(req, res) {
     total,
     port25Open: port25Status.open,
   });
+
+  let consecutiveConnectionErrors = 0;
 
   for (let i = 0; i < emails.length; i++) {
     if (res.writableEnded) break;
@@ -148,7 +161,39 @@ async function handleVerifyStream(req, res) {
 
     await writeLine({ type: 'result', index: i, total, ...result });
 
+    if (isConnectionError(result)) {
+      consecutiveConnectionErrors++;
+      if (consecutiveConnectionErrors >= streakThreshold) {
+        await writeLine({
+          type: 'progress',
+          index: i,
+          total,
+          stage: 'cooldown',
+          reason: 'streak',
+          waitMs: streakCooldownMs,
+          consecutiveErrors: consecutiveConnectionErrors,
+        });
+        await sleep(streakCooldownMs);
+        consecutiveConnectionErrors = 0;
+      }
+    } else {
+      consecutiveConnectionErrors = 0;
+    }
+
     if (i < emails.length - 1) {
+      if (cooldownEvery > 0 && (i + 1) % cooldownEvery === 0) {
+        await writeLine({
+          type: 'progress',
+          index: i,
+          total,
+          stage: 'cooldown',
+          reason: 'batch',
+          waitMs: cooldownMs,
+          batchSize: cooldownEvery,
+        });
+        await sleep(cooldownMs);
+      }
+
       await writeLine({
         type: 'progress',
         index: i,

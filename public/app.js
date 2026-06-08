@@ -4,6 +4,7 @@ const emailInput = document.getElementById('emailInput');
 const lineCountEl = document.getElementById('lineCount');
 const etaEl = document.getElementById('eta');
 const delaySelect = document.getElementById('delaySelect');
+const slowModeCheck = document.getElementById('slowModeCheck');
 const autoStartCheck = document.getElementById('autoStartCheck');
 const csvUpload = document.getElementById('csvUpload');
 const uploadHint = document.getElementById('uploadHint');
@@ -33,7 +34,18 @@ let counts = { YES: 0, NO: 0, UNKNOWN: 0, TEMP: 0, ERROR: 0, INVALID: 0 };
 let port25Open = null;
 
 function getDelayMs() {
-  return parseInt(delaySelect.value, 10) || 10000;
+  return parseInt(delaySelect.value, 10) || 15000;
+}
+
+function getCooldownSettings() {
+  if (!slowModeCheck.checked) {
+    return { cooldownEvery: 0, cooldownMs: 0 };
+  }
+  const delayMs = getDelayMs();
+  if (delayMs >= 30000) {
+    return { cooldownEvery: 5, cooldownMs: 120000 };
+  }
+  return { cooldownEvery: 8, cooldownMs: 90000 };
 }
 
 function formatDuration(seconds) {
@@ -54,7 +66,11 @@ function updateLineCount() {
 
   const delayMs = getDelayMs();
   const perEmail = port25Open === false ? 5000 : PER_EMAIL_MS;
-  const seconds = Math.ceil((n * perEmail + Math.max(0, n - 1) * delayMs) / 1000);
+  const { cooldownEvery, cooldownMs } = getCooldownSettings();
+  const batchPauses = cooldownEvery > 0 ? Math.floor(Math.max(0, n - 1) / cooldownEvery) : 0;
+  const seconds = Math.ceil(
+    (n * perEmail + Math.max(0, n - 1) * delayMs + batchPauses * cooldownMs) / 1000
+  );
   etaEl.textContent = formatDuration(seconds);
 }
 
@@ -227,7 +243,12 @@ function describeProgress(msg) {
     case 'smtp_connect':
       return `Email ${n} of ${msg.total}: connecting to ${msg.mxHost} (${msg.mxIndex + 1}/${msg.mxTotal})`;
     case 'retry':
-      return `Email ${n} of ${msg.total}: connection failed — retrying ${msg.mxHost} in ${Math.round((msg.waitMs || 5000) / 1000)}s…`;
+      return `Email ${n} of ${msg.total}: retry ${msg.attempt}/${msg.maxAttempts - 1} for ${msg.mxHost} in ${Math.round((msg.waitMs || 10000) / 1000)}s…`;
+    case 'cooldown':
+      if (msg.reason === 'streak') {
+        return `Rate limit detected — pausing ${Math.round((msg.waitMs || 120000) / 1000)}s after ${msg.consecutiveErrors} connection failures…`;
+      }
+      return `Batch pause — waiting ${Math.round((msg.waitMs || 90000) / 1000)}s after every ${msg.batchSize} emails…`;
     case 'waiting':
       return `Waiting ${Math.round((msg.delayMs || delayMs) / 1000)}s before next email…`;
     case 'invalid':
@@ -350,6 +371,7 @@ async function startVerification() {
   stopBtn.disabled = false;
   exportBtn.disabled = true;
   delaySelect.disabled = true;
+  slowModeCheck.disabled = true;
   csvUpload.disabled = true;
   progressSection.hidden = false;
   updateProgress(0, emails.length, 'Starting…');
@@ -359,7 +381,7 @@ async function startVerification() {
     const response = await fetch('/api/verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ emails, delayMs }),
+      body: JSON.stringify({ emails, delayMs, ...getCooldownSettings() }),
       signal: abortController.signal,
     });
 
@@ -438,6 +460,7 @@ async function startVerification() {
     verifyBtn.disabled = false;
     stopBtn.disabled = true;
     delaySelect.disabled = false;
+    slowModeCheck.disabled = false;
     csvUpload.disabled = false;
     abortController = null;
     if (results.length > 0) {
@@ -453,6 +476,7 @@ function stopVerification() {
   stopBtn.disabled = true;
   verifyBtn.disabled = false;
   delaySelect.disabled = false;
+  slowModeCheck.disabled = false;
   csvUpload.disabled = false;
   progressLabel.textContent = 'Stopped';
   setProgressDetail('Verification stopped. Export CSV to save partial results.');
@@ -494,6 +518,7 @@ async function handleCsvUpload(event) {
 
 emailInput.addEventListener('input', updateLineCount);
 delaySelect.addEventListener('change', updateLineCount);
+slowModeCheck.addEventListener('change', updateLineCount);
 verifyBtn.addEventListener('click', startVerification);
 stopBtn.addEventListener('click', stopVerification);
 exportBtn.addEventListener('click', exportCsv);
