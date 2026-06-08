@@ -49,8 +49,8 @@ function parseBody(req) {
     let body = '';
     req.on('data', (chunk) => {
       body += chunk;
-      if (body.length > 2 * 1024 * 1024) {
-        reject(new Error('Request body too large'));
+      if (body.length > 15 * 1024 * 1024) {
+        reject(new Error('Request body too large (max 15 MB)'));
         req.destroy();
       }
     });
@@ -79,8 +79,14 @@ async function handleVerifyStream(req, res) {
     sendJson(res, 400, { error: 'No emails provided' });
     return;
   }
+  if (emails.length > 10000) {
+    sendJson(res, 400, { error: 'Maximum 10,000 emails per batch' });
+    return;
+  }
 
-  const delayMs = typeof payload.delayMs === 'number' ? payload.delayMs : DEFAULTS.delayBetweenMs;
+  const delayMs = typeof payload.delayMs === 'number'
+    ? Math.max(1000, Math.min(payload.delayMs, 60000))
+    : DEFAULTS.delayBetweenMs;
 
   res.writeHead(200, {
     'Content-Type': 'application/x-ndjson',

@@ -1,9 +1,12 @@
-const DELAY_MS = 2000;
-const PER_EMAIL_MS = 7000;
+const PER_EMAIL_MS = 12000;
 
 const emailInput = document.getElementById('emailInput');
 const lineCountEl = document.getElementById('lineCount');
 const etaEl = document.getElementById('eta');
+const delaySelect = document.getElementById('delaySelect');
+const autoStartCheck = document.getElementById('autoStartCheck');
+const csvUpload = document.getElementById('csvUpload');
+const uploadHint = document.getElementById('uploadHint');
 const verifyBtn = document.getElementById('verifyBtn');
 const stopBtn = document.getElementById('stopBtn');
 const exportBtn = document.getElementById('exportBtn');
@@ -29,6 +32,10 @@ let results = [];
 let counts = { YES: 0, NO: 0, UNKNOWN: 0, TEMP: 0, ERROR: 0, INVALID: 0 };
 let port25Open = null;
 
+function getDelayMs() {
+  return parseInt(delaySelect.value, 10) || 10000;
+}
+
 function formatDuration(seconds) {
   if (seconds < 60) return `~${seconds}s`;
   if (seconds < 3600) return `~${Math.ceil(seconds / 60)} min`;
@@ -45,8 +52,9 @@ function updateLineCount() {
     return;
   }
 
+  const delayMs = getDelayMs();
   const perEmail = port25Open === false ? 5000 : PER_EMAIL_MS;
-  const seconds = Math.ceil((n * perEmail + Math.max(0, n - 1) * DELAY_MS) / 1000);
+  const seconds = Math.ceil((n * perEmail + Math.max(0, n - 1) * delayMs) / 1000);
   etaEl.textContent = formatDuration(seconds);
 }
 
@@ -55,6 +63,81 @@ function parseEmails(text) {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
+}
+
+function parseCsvLine(line) {
+  const fields = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        current += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ',') {
+      fields.push(current);
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  fields.push(current);
+  return fields.map((f) => f.trim());
+}
+
+function extractEmailFromCell(value) {
+  if (!value) return null;
+  const match = value.match(/[^\s,;"<>]+@[^\s,;"<>]+\.[^\s,;"<>]+/);
+  return match ? match[0].trim().toLowerCase() : null;
+}
+
+function parseCsvEmails(text) {
+  const lines = text.split(/\r?\n/).filter((line) => line.trim());
+  if (lines.length === 0) return [];
+
+  const header = parseCsvLine(lines[0]);
+  let emailColIndex = header.findIndex((h) => /email/i.test(h));
+  const isHeader = emailColIndex !== -1 || !extractEmailFromCell(header[0]);
+
+  const emails = [];
+  const seen = new Set();
+  const startRow = isHeader ? 1 : 0;
+
+  if (isHeader && emailColIndex === -1) {
+    emailColIndex = 0;
+  }
+
+  for (let i = startRow; i < lines.length; i++) {
+    const cols = parseCsvLine(lines[i]);
+    let email = null;
+
+    if (isHeader && emailColIndex < cols.length) {
+      email = extractEmailFromCell(cols[emailColIndex]);
+    } else {
+      for (const col of cols) {
+        email = extractEmailFromCell(col);
+        if (email) break;
+      }
+    }
+
+    if (email && !seen.has(email)) {
+      seen.add(email);
+      emails.push(email);
+    }
+  }
+
+  return emails;
 }
 
 function setNetworkBanner(state, title, text) {
@@ -134,6 +217,7 @@ async function pollNetworkStatus(attempts = 10) {
 function describeProgress(msg) {
   const n = msg.index + 1;
   const email = msg.email || '';
+  const delayMs = getDelayMs();
 
   switch (msg.stage) {
     case 'starting':
@@ -142,8 +226,10 @@ function describeProgress(msg) {
       return `Email ${n} of ${msg.total}: looking up MX records for ${msg.domain || email}`;
     case 'smtp_connect':
       return `Email ${n} of ${msg.total}: connecting to ${msg.mxHost} (${msg.mxIndex + 1}/${msg.mxTotal})`;
+    case 'retry':
+      return `Email ${n} of ${msg.total}: connection failed — retrying ${msg.mxHost} in ${Math.round((msg.waitMs || 5000) / 1000)}s…`;
     case 'waiting':
-      return `Waiting ${Math.round((msg.delayMs || DELAY_MS) / 1000)}s before next email…`;
+      return `Waiting ${Math.round((msg.delayMs || delayMs) / 1000)}s before next email…`;
     case 'invalid':
       return `Email ${n}: invalid format — ${email}`;
     default:
@@ -194,7 +280,10 @@ function addResultRow(index, row) {
     <td class="meaning">${escapeHtml(row.meaning) || '—'}</td>
   `;
   resultsBody.appendChild(tr);
-  tr.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+  if (results.length <= 50 || results.length % 25 === 0) {
+    tr.scrollIntoView({ behavior: results.length <= 50 ? 'smooth' : 'auto', block: 'nearest' });
+  }
 }
 
 function updateProgress(done, total, label) {
@@ -247,25 +336,30 @@ function exportCsv() {
 async function startVerification() {
   const emails = parseEmails(emailInput.value);
   if (emails.length === 0) {
-    alert('Paste at least one email address (one per line).');
+    alert('Paste at least one email address or upload a CSV file.');
     return;
   }
 
+  if (abortController) return;
+
   resetResults();
   abortController = new AbortController();
+  const delayMs = getDelayMs();
 
   verifyBtn.disabled = true;
   stopBtn.disabled = false;
   exportBtn.disabled = true;
+  delaySelect.disabled = true;
+  csvUpload.disabled = true;
   progressSection.hidden = false;
   updateProgress(0, emails.length, 'Starting…');
-  setProgressDetail('Connecting to server…');
+  setProgressDetail(`Verifying ${emails.length.toLocaleString()} emails (${delayMs / 1000}s delay)…`);
 
   try {
     const response = await fetch('/api/verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ emails, delayMs: DELAY_MS }),
+      body: JSON.stringify({ emails, delayMs }),
       signal: abortController.signal,
     });
 
@@ -332,7 +426,7 @@ async function startVerification() {
           );
         } else if (msg.type === 'done') {
           updateProgress(msg.total, msg.total, 'Complete');
-          setProgressDetail('Verification finished.');
+          setProgressDetail('Verification finished. Export CSV to save results.');
         }
       }
     }
@@ -343,6 +437,8 @@ async function startVerification() {
   } finally {
     verifyBtn.disabled = false;
     stopBtn.disabled = true;
+    delaySelect.disabled = false;
+    csvUpload.disabled = false;
     abortController = null;
     if (results.length > 0) {
       exportBtn.disabled = false;
@@ -356,20 +452,56 @@ function stopVerification() {
   }
   stopBtn.disabled = true;
   verifyBtn.disabled = false;
+  delaySelect.disabled = false;
+  csvUpload.disabled = false;
   progressLabel.textContent = 'Stopped';
-  setProgressDetail('Verification stopped.');
+  setProgressDetail('Verification stopped. Export CSV to save partial results.');
   if (results.length > 0) {
     exportBtn.disabled = false;
   }
 }
 
+async function handleCsvUpload(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+
+  uploadHint.textContent = `Reading ${file.name}…`;
+
+  try {
+    const text = await file.text();
+    const emails = parseCsvEmails(text);
+
+    if (emails.length === 0) {
+      alert('No email addresses found in this CSV.');
+      uploadHint.textContent = 'No emails found — try a column named “Email” or one email per line';
+      return;
+    }
+
+    emailInput.value = emails.join('\n');
+    updateLineCount();
+    uploadHint.textContent = `Loaded ${emails.length.toLocaleString()} unique emails from ${file.name}`;
+
+    if (autoStartCheck.checked) {
+      await startVerification();
+    }
+  } catch (err) {
+    alert(`Could not read CSV: ${err.message}`);
+    uploadHint.textContent = 'CSV upload failed';
+  } finally {
+    csvUpload.value = '';
+  }
+}
+
 emailInput.addEventListener('input', updateLineCount);
+delaySelect.addEventListener('change', updateLineCount);
 verifyBtn.addEventListener('click', startVerification);
 stopBtn.addEventListener('click', stopVerification);
 exportBtn.addEventListener('click', exportCsv);
+csvUpload.addEventListener('change', handleCsvUpload);
 clearBtn.addEventListener('click', () => {
   if (abortController) stopVerification();
   emailInput.value = '';
+  uploadHint.textContent = 'CSV with an “Email” column, or one email per line';
   resetResults();
   progressSection.hidden = true;
   setProgressDetail('');

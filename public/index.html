@@ -11,8 +11,8 @@
     <header>
       <h1>SMTP Handshake Lookup</h1>
       <p class="subtitle">
-        Paste one email per line. The server performs MX lookup and an SMTP RCPT TO handshake
-        (no email is sent).
+        Paste emails (one per line) or upload a CSV. The server performs MX lookup and an SMTP
+        RCPT TO handshake (no email is sent).
       </p>
     </header>
 
@@ -28,6 +28,29 @@
         rows="12"
         placeholder="user1@example.com&#10;user2@example.com&#10;user3@example.com"
       ></textarea>
+      <div class="upload-row">
+        <label class="file-label" for="csvUpload">
+          <span class="btn secondary file-btn">Upload CSV</span>
+          <input type="file" id="csvUpload" accept=".csv,text/csv" hidden>
+        </label>
+        <span class="upload-hint" id="uploadHint">CSV with an “Email” column, or one email per line</span>
+      </div>
+      <div class="options-row">
+        <label class="option-field" for="delaySelect">
+          Delay between emails
+          <select id="delaySelect">
+            <option value="2000">2 seconds</option>
+            <option value="5000">5 seconds</option>
+            <option value="10000" selected>10 seconds (recommended)</option>
+            <option value="15000">15 seconds</option>
+            <option value="30000">30 seconds</option>
+          </select>
+        </label>
+        <label class="option-check">
+          <input type="checkbox" id="autoStartCheck" checked>
+          Start automatically after CSV upload
+        </label>
+      </div>
       <div class="input-meta">
         <span id="lineCount">0 emails</span>
         <span class="hint">Estimated time: <span id="eta">—</span></span>
@@ -86,8 +109,8 @@
 
     <footer>
       <p>
-        Runs locally on your machine. MAIL FROM: <code>admin@futureleadersunion.com</code>.
-        ~2s delay between checks to reduce rate limiting.
+        MAIL FROM: <code>admin@futureleadersunion.com</code>.
+        Use a 10–15s delay for large batches. Keep this browser tab open until complete.
       </p>
     </footer>
   </div>

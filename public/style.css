@@ -121,9 +121,82 @@ textarea:focus {
 .input-meta {
   display: flex;
   justify-content: space-between;
-  margin-top: 0.5rem;
+  margin-top: 0.75rem;
   font-size: 0.8125rem;
   color: var(--muted);
+}
+
+.upload-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.file-label {
+  margin: 0;
+  cursor: pointer;
+}
+
+.file-btn {
+  display: inline-block;
+  pointer-events: none;
+}
+
+.upload-hint {
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.options-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 1.25rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.option-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  margin: 0;
+}
+
+.option-field select {
+  min-width: 220px;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.875rem;
+}
+
+.option-field select:disabled {
+  opacity: 0.5;
+}
+
+.option-check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--muted);
+  margin: 0;
+  cursor: pointer;
+  user-select: none;
+}
+
+.option-check input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--accent);
 }
 
 .actions {
