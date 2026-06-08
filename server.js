@@ -2,9 +2,12 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { verifyEmail, sleep, DEFAULTS } = require('./lib/smtp');
+const { checkPort25Open } = require('./lib/port25');
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
+
+let port25Status = { open: null, host: null, port: null, error: null, checkedAt: null };
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -86,13 +89,42 @@ async function handleVerifyStream(req, res) {
     'X-Accel-Buffering': 'no',
   });
 
+  const writeLine = async (obj) => {
+    if (res.writableEnded) return;
+    const line = JSON.stringify(obj) + '\n';
+    if (!res.write(line)) {
+      await new Promise((resolve) => res.once('drain', resolve));
+    }
+  };
+
   const total = emails.length;
-  res.write(JSON.stringify({ type: 'start', total }) + '\n');
+  await writeLine({
+    type: 'start',
+    total,
+    port25Open: port25Status.open,
+  });
 
   for (let i = 0; i < emails.length; i++) {
+    if (res.writableEnded) break;
+
+    await writeLine({
+      type: 'progress',
+      index: i,
+      total,
+      stage: 'starting',
+      email: emails[i],
+    });
+
     let result;
     try {
-      result = await verifyEmail(emails[i]);
+      result = await verifyEmail(emails[i], {}, (progress) => {
+        writeLine({
+          type: 'progress',
+          index: i,
+          total,
+          ...progress,
+        });
+      });
     } catch (err) {
       result = {
         email: emails[i],
@@ -108,18 +140,23 @@ async function handleVerifyStream(req, res) {
 
     if (res.writableEnded) break;
 
-    const line = JSON.stringify({ type: 'result', index: i, total, ...result }) + '\n';
-    if (!res.write(line)) {
-      await new Promise((resolve) => res.once('drain', resolve));
-    }
+    await writeLine({ type: 'result', index: i, total, ...result });
 
     if (i < emails.length - 1) {
+      await writeLine({
+        type: 'progress',
+        index: i,
+        total,
+        stage: 'waiting',
+        email: emails[i + 1],
+        delayMs,
+      });
       await sleep(delayMs);
     }
   }
 
   if (!res.writableEnded) {
-    res.write(JSON.stringify({ type: 'done', total }) + '\n');
+    await writeLine({ type: 'done', total });
     res.end();
   }
 }
@@ -147,6 +184,18 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (req.method === 'GET' && req.url === '/api/status') {
+    sendJson(res, 200, {
+      port25: port25Status,
+      defaults: {
+        connectTimeoutMs: DEFAULTS.connectTimeoutMs,
+        timeoutMs: DEFAULTS.timeoutMs,
+        delayBetweenMs: DEFAULTS.delayBetweenMs,
+      },
+    });
+    return;
+  }
+
   if (req.method === 'GET') {
     serveStatic(req, res);
     return;
@@ -160,5 +209,24 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log(`Email verification running at http://127.0.0.1:${PORT}`);
   console.log(`MAIL FROM: ${DEFAULTS.mailFrom}`);
   console.log(`Delay between checks: ${DEFAULTS.delayBetweenMs}ms`);
-  console.log('Note: SMTP requires outbound port 25. Some ISPs block this on residential networks.');
+  console.log('Checking outbound port 25…');
+
+  checkPort25Open().then((result) => {
+    port25Status = {
+      open: result.open,
+      host: result.host,
+      port: result.port,
+      error: result.error,
+      checkedAt: new Date().toISOString(),
+    };
+
+    if (result.open) {
+      console.log(`Port 25 is reachable (${result.host}:${result.port})`);
+    } else {
+      console.warn('Port 25 appears blocked or unreachable.');
+      console.warn(`  Probe: ${result.host}:${result.port}`);
+      console.warn(`  Reason: ${result.error}`);
+      console.warn('  SMTP verification will fail until you run this on a network with open port 25 (e.g. a VPS).');
+    }
+  });
 });

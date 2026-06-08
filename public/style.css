@@ -48,6 +48,43 @@ header h1 {
   max-width: 640px;
 }
 
+.network-banner {
+  margin-top: 1.25rem;
+  padding: 0.875rem 1rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.network-banner.checking {
+  border-color: rgba(59, 130, 246, 0.45);
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.network-banner.blocked {
+  border-color: rgba(249, 115, 22, 0.45);
+  background: rgba(249, 115, 22, 0.1);
+}
+
+.network-banner strong {
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+.network-banner p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.progress-detail {
+  margin: 0.625rem 0 0;
+  font-size: 0.8125rem;
+  color: var(--muted);
+  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  min-height: 1.25rem;
+}
+
 .input-section {
   margin-top: 2rem;
   background: var(--surface);
