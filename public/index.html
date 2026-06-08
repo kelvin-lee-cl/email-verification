@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SMTP Email Verification</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>SMTP Handshake Lookup</h1>
+      <p class="subtitle">
+        Paste one email per line. The server performs MX lookup and an SMTP RCPT TO handshake
+        (no email is sent).
+      </p>
+    </header>
+
+    <section class="input-section">
+      <label for="emailInput">Email addresses</label>
+      <textarea
+        id="emailInput"
+        rows="12"
+        placeholder="user1@example.com&#10;user2@example.com&#10;user3@example.com"
+      ></textarea>
+      <div class="input-meta">
+        <span id="lineCount">0 emails</span>
+        <span class="hint">Estimated time: <span id="eta">—</span></span>
+      </div>
+      <div class="actions">
+        <button type="button" id="verifyBtn" class="btn primary">Start verification</button>
+        <button type="button" id="stopBtn" class="btn secondary" disabled>Stop</button>
+        <button type="button" id="exportBtn" class="btn secondary" disabled>Export CSV</button>
+        <button type="button" id="clearBtn" class="btn ghost">Clear</button>
+      </div>
+    </section>
+
+    <section class="progress-section" id="progressSection" hidden>
+      <div class="progress-header">
+        <span id="progressLabel">Verifying…</span>
+        <span id="progressCount">0 / 0</span>
+      </div>
+      <div class="progress-bar">
+        <div class="progress-fill" id="progressFill"></div>
+      </div>
+    </section>
+
+    <section class="results-section">
+      <div class="results-header">
+        <h2>Results</h2>
+        <div class="summary" id="summary" hidden>
+          <span class="badge yes" id="countYes">YES: 0</span>
+          <span class="badge no" id="countNo">NO: 0</span>
+          <span class="badge unknown" id="countUnknown">UNKNOWN: 0</span>
+          <span class="badge temp" id="countTemp">TEMP: 0</span>
+          <span class="badge error" id="countError">ERROR: 0</span>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table id="resultsTable">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Email</th>
+              <th>Status</th>
+              <th>SMTP Code</th>
+              <th>MX Server</th>
+              <th>Error</th>
+              <th>What it means</th>
+            </tr>
+          </thead>
+          <tbody id="resultsBody">
+            <tr class="empty-row">
+              <td colspan="7">Results will appear here as each email is verified.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer>
+      <p>
+        Runs locally on your machine. MAIL FROM: <code>admin@futureleadersunion.com</code>.
+        ~2s delay between checks to reduce rate limiting.
+      </p>
+    </footer>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
