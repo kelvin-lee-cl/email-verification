@@ -1,10 +1,20 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { verifyEmail, sleep, isConnectionError, DEFAULTS } = require('./lib/smtp');
+const { DEFAULTS } = require('./lib/smtp');
 const { checkPort25Open } = require('./lib/port25');
+const {
+  createJob,
+  getJob,
+  listJobs,
+  cancelJob,
+  readResults,
+  resultsToCsv,
+  recoverJobsOnStartup,
+} = require('./lib/jobs');
 
 const PORT = process.env.PORT || 3000;
+const HOST = process.env.HOST || '127.0.0.1';
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
 let port25Status = { open: null, host: null, port: null, error: null, checkedAt: null };
@@ -65,150 +75,75 @@ function parseBody(req) {
   });
 }
 
-async function handleVerifyStream(req, res) {
-  let payload;
+function parseQuery(url) {
+  const i = url.indexOf('?');
+  if (i === -1) return {};
+  const params = new URLSearchParams(url.slice(i + 1));
+  const out = {};
+  for (const [key, value] of params) out[key] = value;
+  return out;
+}
+
+function matchJobRoute(url) {
+  const pathOnly = url.split('?')[0];
+  const m = pathOnly.match(/^\/api\/jobs\/([0-9a-f-]{36})(\/results|\/download|\/cancel)?$/);
+  if (!m) return null;
+  return { id: m[1], action: m[2] ? m[2].slice(1) : null };
+}
+
+async function handleCreateJob(req, res) {
   try {
-    payload = await parseBody(req);
+    const payload = await parseBody(req);
+    const meta = createJob(payload);
+    sendJson(res, 201, { jobId: meta.id, job: meta });
   } catch (err) {
     sendJson(res, 400, { error: err.message });
-    return;
   }
+}
 
-  const emails = Array.isArray(payload.emails) ? payload.emails : [];
-  if (emails.length === 0) {
-    sendJson(res, 400, { error: 'No emails provided' });
-    return;
+function handleGetJob(res, id) {
+  try {
+    sendJson(res, 200, getJob(id));
+  } catch {
+    sendJson(res, 404, { error: 'Job not found' });
   }
-  if (emails.length > 10000) {
-    sendJson(res, 400, { error: 'Maximum 10,000 emails per batch' });
-    return;
+}
+
+function handleGetResults(res, id, query) {
+  try {
+    const offset = Math.max(0, parseInt(query.offset, 10) || 0);
+    const results = readResults(id, offset);
+    sendJson(res, 200, { results, offset, count: results.length });
+  } catch {
+    sendJson(res, 404, { error: 'Job not found' });
   }
+}
 
-  const delayMs = typeof payload.delayMs === 'number'
-    ? Math.max(1000, Math.min(payload.delayMs, 60000))
-    : DEFAULTS.delayBetweenMs;
-
-  const cooldownEvery = typeof payload.cooldownEvery === 'number'
-    ? Math.max(0, Math.min(payload.cooldownEvery, 100))
-    : 8;
-  const cooldownMs = typeof payload.cooldownMs === 'number'
-    ? Math.max(10000, Math.min(payload.cooldownMs, 600000))
-    : 90000;
-  const streakCooldownMs = typeof payload.streakCooldownMs === 'number'
-    ? Math.max(30000, Math.min(payload.streakCooldownMs, 600000))
-    : 120000;
-  const streakThreshold = 3;
-
-  res.writeHead(200, {
-    'Content-Type': 'application/x-ndjson',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
-    'X-Accel-Buffering': 'no',
-  });
-
-  const writeLine = async (obj) => {
-    if (res.writableEnded) return;
-    const line = JSON.stringify(obj) + '\n';
-    if (!res.write(line)) {
-      await new Promise((resolve) => res.once('drain', resolve));
-    }
-  };
-
-  const total = emails.length;
-  await writeLine({
-    type: 'start',
-    total,
-    port25Open: port25Status.open,
-  });
-
-  let consecutiveConnectionErrors = 0;
-
-  for (let i = 0; i < emails.length; i++) {
-    if (res.writableEnded) break;
-
-    await writeLine({
-      type: 'progress',
-      index: i,
-      total,
-      stage: 'starting',
-      email: emails[i],
+function handleDownload(res, id) {
+  try {
+    const meta = getJob(id);
+    const csv = resultsToCsv(id);
+    const stamp = meta.createdAt.slice(0, 19).replace(/[:T]/g, '-');
+    res.writeHead(200, {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': `attachment; filename="email-verification-${stamp}.csv"`,
     });
-
-    let result;
-    try {
-      result = await verifyEmail(emails[i], {}, (progress) => {
-        writeLine({
-          type: 'progress',
-          index: i,
-          total,
-          ...progress,
-        });
-      });
-    } catch (err) {
-      result = {
-        email: emails[i],
-        domain: null,
-        mxServer: null,
-        smtpCode: null,
-        smtpMessage: null,
-        status: 'ERROR',
-        error: err.message,
-        meaning: err.message,
-      };
-    }
-
-    if (res.writableEnded) break;
-
-    await writeLine({ type: 'result', index: i, total, ...result });
-
-    if (isConnectionError(result)) {
-      consecutiveConnectionErrors++;
-      if (consecutiveConnectionErrors >= streakThreshold) {
-        await writeLine({
-          type: 'progress',
-          index: i,
-          total,
-          stage: 'cooldown',
-          reason: 'streak',
-          waitMs: streakCooldownMs,
-          consecutiveErrors: consecutiveConnectionErrors,
-        });
-        await sleep(streakCooldownMs);
-        consecutiveConnectionErrors = 0;
-      }
-    } else {
-      consecutiveConnectionErrors = 0;
-    }
-
-    if (i < emails.length - 1) {
-      if (cooldownEvery > 0 && (i + 1) % cooldownEvery === 0) {
-        await writeLine({
-          type: 'progress',
-          index: i,
-          total,
-          stage: 'cooldown',
-          reason: 'batch',
-          waitMs: cooldownMs,
-          batchSize: cooldownEvery,
-        });
-        await sleep(cooldownMs);
-      }
-
-      await writeLine({
-        type: 'progress',
-        index: i,
-        total,
-        stage: 'waiting',
-        email: emails[i + 1],
-        delayMs,
-      });
-      await sleep(delayMs);
-    }
+    res.end(csv);
+  } catch {
+    sendJson(res, 404, { error: 'Job not found' });
   }
+}
 
-  if (!res.writableEnded) {
-    await writeLine({ type: 'done', total });
-    res.end();
+async function handleCancelJob(req, res, id) {
+  try {
+    const cancelled = cancelJob(id);
+    if (!cancelled) {
+      sendJson(res, 409, { error: 'Job is not running' });
+      return;
+    }
+    sendJson(res, 200, { ok: true, job: getJob(id) });
+  } catch {
+    sendJson(res, 404, { error: 'Job not found' });
   }
 }
 
@@ -220,18 +155,6 @@ const server = http.createServer((req, res) => {
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
     res.end();
-    return;
-  }
-
-  if (req.method === 'POST' && req.url === '/api/verify') {
-    handleVerifyStream(req, res).catch((err) => {
-      console.error('Verify stream error:', err);
-      if (!res.headersSent) {
-        sendJson(res, 500, { error: err.message });
-      } else if (!res.writableEnded) {
-        res.end();
-      }
-    });
     return;
   }
 
@@ -247,6 +170,46 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (req.url.startsWith('/api/jobs')) {
+    if (req.method === 'POST' && req.url.split('?')[0] === '/api/jobs') {
+      handleCreateJob(req, res);
+      return;
+    }
+
+    if (req.method === 'GET' && req.url.split('?')[0] === '/api/jobs') {
+      sendJson(res, 200, { jobs: listJobs() });
+      return;
+    }
+
+    const route = matchJobRoute(req.url);
+    if (!route) {
+      sendJson(res, 404, { error: 'Not found' });
+      return;
+    }
+
+    const query = parseQuery(req.url);
+
+    if (req.method === 'GET' && !route.action) {
+      handleGetJob(res, route.id);
+      return;
+    }
+    if (req.method === 'GET' && route.action === 'results') {
+      handleGetResults(res, route.id, query);
+      return;
+    }
+    if (req.method === 'GET' && route.action === 'download') {
+      handleDownload(res, route.id);
+      return;
+    }
+    if (req.method === 'POST' && route.action === 'cancel') {
+      handleCancelJob(req, res, route.id);
+      return;
+    }
+
+    sendJson(res, 405, { error: 'Method not allowed' });
+    return;
+  }
+
   if (req.method === 'GET') {
     serveStatic(req, res);
     return;
@@ -256,10 +219,13 @@ const server = http.createServer((req, res) => {
   res.end('Method not allowed');
 });
 
-server.listen(PORT, '127.0.0.1', () => {
-  console.log(`Email verification running at http://127.0.0.1:${PORT}`);
+recoverJobsOnStartup();
+
+server.listen(PORT, HOST, () => {
+  console.log(`Email verification running at http://${HOST}:${PORT}`);
   console.log(`MAIL FROM: ${DEFAULTS.mailFrom}`);
   console.log(`Delay between checks: ${DEFAULTS.delayBetweenMs}ms`);
+  console.log('Background jobs enabled — stored in data/jobs/');
   console.log('Checking outbound port 25…');
 
   checkPort25Open().then((result) => {
